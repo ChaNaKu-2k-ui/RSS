@@ -1,0 +1,12 @@
+name = "wow-rss-worker"
+main = "index.js"
+compatibility_date = "2024-01-01"
+
+[[kv_namespaces]]
+binding = "WOW_KV"
+id = "ඔබේ_KV_NAMESPACE_ID_එක_මෙතනට"
+
+[[rules]]
+type = "Text"
+globs = ["**/*.txt"]
+fallthrough = true
