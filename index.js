@@ -48,7 +48,7 @@ async function fetchGitHubTextFile(fileUrl) {
 
 async function updateVideoFeed(env, isDiagnostic = false) {
   let logs = [];
-  if (isDiagnostic) logs.push("=== STARTING SMART MP4 & REDIRECT RESOLVER RSS ===");
+  if (isDiagnostic) logs.push("=== STARTING SMART NUMERIC ID VIDEO RSS ===");
 
   const headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -67,7 +67,8 @@ async function updateVideoFeed(env, isDiagnostic = false) {
   let seenIds = (await env.WOW_KV.get("seen_ids", "json")) || [];
   let existingItems = (await env.WOW_KV.get("feed_items", "json")) || [];
 
-  const linkRegex = /href=["']((?:https?:\/\/[^"']*)?\/(?:videos?|watch|embed|view|play|v|post)\/([0-9a-zA-Z_-]+)[^"']*)["']/gi;
+  // 🎯 SMART REGEX: URL එකේ Numeric ID එකක් (ඉලක්කම් 3-10 අතර) ඇති සියලුම Video Links අල්ලා ගනී
+  const linkRegex = /href=["']((?:https?:\/\/[^"']*)?\/[^"']*\b(\d{3,10})\b[^"']*)["']/gi;
 
   let newlyFetchedItems = [];
 
@@ -89,19 +90,16 @@ async function updateVideoFeed(env, isDiagnostic = false) {
 
       for (const match of matches) {
         const rawPath = match[1];
-        const videoId = match[2] || rawPath;
+        const videoId = match[2]; // Numeric Video ID (e.g. 49355)
 
-        // 🛑 FILTERING: Category, Pagination, සහ Navigation links අතහැරීම
-        const isNavigationPage = /[\/](new|popular|top|best|trending|categories|tags|search|page[-\d]*|new_page.*|index)\.html?$/i.test(rawPath) || 
-                                 /^(new|popular|top|best|categories|search|index)$/i.test(videoId);
-
-        if (isNavigationPage) continue;
+        // Images, CSS, JS, MP4 direct files match වීම වැළැක්වීම
+        if (/\.(jpg|jpeg|png|gif|webp|css|js|mp4)$/i.test(rawPath)) continue;
 
         if (!seenIds.includes(videoId)) {
           const origin = new URL(latestPageUrl).origin;
           const fullUrl = rawPath.startsWith("http") ? rawPath : `${origin}${rawPath.startsWith('/') ? '' : '/'}${rawPath}`;
           
-          if (!newVideosToProcess.some(v => v.url === fullUrl)) {
+          if (!newVideosToProcess.some(v => v.id === videoId)) {
             newVideosToProcess.push({ id: videoId, url: fullUrl });
           }
         }
@@ -109,10 +107,10 @@ async function updateVideoFeed(env, isDiagnostic = false) {
 
       if (isDiagnostic) logs.push(`   Filtered Single Video Pages to Process: ${newVideosToProcess.length}`);
 
-      newVideosToProcess = newVideosToProcess.slice(0, 3);
+      newVideosToProcess = newVideosToProcess.slice(0, 3); // එකවර වීඩියෝ 3ක් Process කරයි
 
       for (const video of newVideosToProcess) {
-        if (isDiagnostic) logs.push(`   Processing Single Video: ${video.url}`);
+        if (isDiagnostic) logs.push(`   Processing Single Video (ID: ${video.id}): ${video.url}`);
 
         try {
           const pageRes = await fetch(video.url, { headers });
@@ -123,10 +121,10 @@ async function updateVideoFeed(env, isDiagnostic = false) {
 
           let extractedRawUrl = null;
 
-          // 1. Download Links / CDN Matches
+          // 1. Direct CDN Links
           const cdnMatch = pageHtml.match(/href=["'](https?:\/\/[^"'\s]+\.(?:love|com|net|org|site|store|xyz|club)[^"'\s]*\.mp4[^"']*)["']/i);
           
-          // 2. <video src="..."> හෝ loadvideo MP4 Matches (ඔබ එවූ HTML රටාව)
+          // 2. <video src="..."> හෝ loadvideo/49355.mp4 Matches
           const loadVideoMatch = pageHtml.match(/src=["']([^"']*\bloadvideo\/[^"']+\.mp4[^"']*)["']/i) || 
                                  pageHtml.match(/src=["']([^"']+\.mp4(?:\?[^"']*)?)["']/i);
 
@@ -137,10 +135,8 @@ async function updateVideoFeed(env, isDiagnostic = false) {
           }
 
           if (extractedRawUrl) {
-            // HTML entities (&amp;) Clean කිරීම
             extractedRawUrl = extractedRawUrl.replace(/&amp;/g, '&');
 
-            // Relative Path එක Full URL එකක් බවට පත් කිරීම
             let fullTargetUrl = extractedRawUrl;
             if (extractedRawUrl.startsWith("./")) {
               const pageOrigin = new URL(video.url).origin;
@@ -149,7 +145,7 @@ async function updateVideoFeed(env, isDiagnostic = false) {
               fullTargetUrl = new URL(extractedRawUrl, video.url).href;
             }
 
-            // REDIRECT RESOLVER: Loadvideo Link එකෙන් Direct CDN MP4 එක ලබාගැනීම
+            // REDIRECT RESOLVER: CDN Link එක සෘජුව ලබාගැනීම
             let finalMp4Url = fullTargetUrl;
             try {
               const headRes = await fetch(fullTargetUrl, {
@@ -163,7 +159,7 @@ async function updateVideoFeed(env, isDiagnostic = false) {
               }
             } catch (err) {}
 
-            if (isDiagnostic) logs.push(`   ✅ Final Resolved MP4: ${finalMp4Url}`);
+            if (isDiagnostic) logs.push(`   ✅ Direct MP4 Resolved: ${finalMp4Url}`);
 
             const newItem = {
               id: video.id,
