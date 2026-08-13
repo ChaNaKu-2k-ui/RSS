@@ -3,10 +3,7 @@ const GITHUB_WEBHOOKS_RAW = "https://raw.githubusercontent.com/ChaNaKu-2k-ui/RSS
 
 export default {
   async fetch(request, env, ctx) {
-    if (!env.WOW_KV) {
-      return new Response("Error: WOW_KV Binding එක සෙට් වී නැත.", { status: 500 });
-    }
-
+    if (!env.WOW_KV) return new Response("Error: WOW_KV Binding missing.", { status: 500 });
     const url = new URL(request.url);
 
     if (url.searchParams.get("sync") === "true") {
@@ -16,22 +13,8 @@ export default {
       });
     }
 
-    let feedXml = await env.WOW_KV.get("rss_feed_xml");
-    if (!feedXml) {
-      const result = await updateVideoFeed(env, false);
-      feedXml = result.rssXml;
-    }
-
-    return new Response(feedXml, {
-      headers: { 
-        "Content-Type": "application/xml; charset=utf-8",
-        "Cache-Control": "public, max-age=300"
-      }
-    });
-  },
-
-  async scheduled(event, env, ctx) {
-    ctx.waitUntil(updateVideoFeed(env, false));
+    let feedXml = await env.WOW_KV.get("rss_feed_xml") || "<rss></rss>";
+    return new Response(feedXml, { headers: { "Content-Type": "application/xml; charset=utf-8" } });
   }
 };
 
@@ -48,204 +31,109 @@ async function fetchGitHubTextFile(fileUrl) {
 
 async function updateVideoFeed(env, isDiagnostic = false) {
   let logs = [];
-  if (isDiagnostic) logs.push("=== STARTING SMART NUMERIC ID VIDEO RSS ===");
+  logs.push("=== 🕵️ VIDEO CRAWLER DIAGNOSTIC TEST ===");
 
   const headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept": "text/html,application/xhtml+xml",
     "Accept-Language": "en-US,en;q=0.9"
   };
 
   const targetPages = await fetchGitHubTextFile(GITHUB_URLS_RAW);
-  const webhookUrls = await fetchGitHubTextFile(GITHUB_WEBHOOKS_RAW);
-
-  if (isDiagnostic) {
-    logs.push(`1. GitHub Target URLs: ${targetPages.length}`);
-    logs.push(`2. GitHub Webhooks: ${webhookUrls.length}`);
-  }
-
-  let seenIds = (await env.WOW_KV.get("seen_ids", "json")) || [];
-  let existingItems = (await env.WOW_KV.get("feed_items", "json")) || [];
-
-  // 🎯 SMART REGEX: URL එකේ Numeric ID එකක් (ඉලක්කම් 3-10 අතර) ඇති සියලුම Video Links අල්ලා ගනී
-  const linkRegex = /href=["']((?:https?:\/\/[^"']*)?\/[^"']*\b(\d{3,10})\b[^"']*)["']/gi;
-
-  let newlyFetchedItems = [];
-
+  
   for (const latestPageUrl of targetPages) {
-    if (isDiagnostic) logs.push(`\n--- Fetching Page: ${latestPageUrl} ---`);
-
     try {
+      // ---------------------------------------------------------
+      // STEP 1: Main URL එකට යාම සහ Title එක ගැනීම
+      // ---------------------------------------------------------
       const res = await fetch(latestPageUrl, { headers });
-      if (isDiagnostic) logs.push(`   Status Code: ${res.status}`);
-
-      if (!res.ok) continue;
-
       const html = await res.text();
-      let matches = [...html.matchAll(linkRegex)];
+      
+      const mainTitleMatch = html.match(/<title[^>]*>(.*?)<\/title>/i);
+      const mainTitle = mainTitleMatch ? mainTitleMatch[1].trim() : "Title එකක් නැත";
+      
+      logs.push(`\n👉 [STEP 1] Main URL එකට ගියා: ${latestPageUrl}`);
+      logs.push(`   📌 Main Page Title: ${mainTitle}`);
 
-      if (isDiagnostic) logs.push(`   Found Raw Links: ${matches.length}`);
-
-      let newVideosToProcess = [];
-
-      for (const match of matches) {
-        const rawPath = match[1];
-        const videoId = match[2]; // Numeric Video ID (e.g. 49355)
-
-        // Images, CSS, JS, MP4 direct files match වීම වැළැක්වීම
-        if (/\.(jpg|jpeg|png|gif|webp|css|js|mp4)$/i.test(rawPath)) continue;
-
-        if (!seenIds.includes(videoId)) {
-          const origin = new URL(latestPageUrl).origin;
-          const fullUrl = rawPath.startsWith("http") ? rawPath : `${origin}${rawPath.startsWith('/') ? '' : '/'}${rawPath}`;
-          
-          if (!newVideosToProcess.some(v => v.id === videoId)) {
-            newVideosToProcess.push({ id: videoId, url: fullUrl });
-          }
-        }
-      }
-
-      if (isDiagnostic) logs.push(`   Filtered Single Video Pages to Process: ${newVideosToProcess.length}`);
-
-      newVideosToProcess = newVideosToProcess.slice(0, 3); // එකවර වීඩියෝ 3ක් Process කරයි
-
-      for (const video of newVideosToProcess) {
-        if (isDiagnostic) logs.push(`   Processing Single Video (ID: ${video.id}): ${video.url}`);
+      // Video Links හොයාගැනීම (Category / New / Popular වගේ ඒවා අයින් කරලා)
+      const allLinksMatch = [...html.matchAll(/<a[^>]+href=["']([^"']+)["']/gi)];
+      let videoUrls = [];
+      
+      for (const match of allLinksMatch) {
+        let link = match[1];
+        if(link.match(/\.(jpg|png|css|js|ico)$/i)) continue;
+        if(link.match(/(new|popular|top|categories|login|signup|tags|page-)/i)) continue; // Navigation පිටු අයින් කරයි
+        if(link === "/" || link === "#" || link.startsWith("javascript")) continue;
 
         try {
-          const pageRes = await fetch(video.url, { headers });
-          const pageHtml = await pageRes.text();
+          const origin = new URL(latestPageUrl).origin;
+          const fullUrl = link.startsWith("http") ? link : new URL(link, origin).href;
+          if (!videoUrls.includes(fullUrl)) {
+            videoUrls.push(fullUrl);
+          }
+        } catch(e){}
+      }
 
-          const titleMatch = pageHtml.match(/<title>(.*?)<\/title>/i) || pageHtml.match(/<h1[^>]*>(.*?)<\/h1>/i);
-          let title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').trim() : `Video ${video.id}`;
+      logs.push(`   🔍 Video පිටු කියලා හිතන්න පුළුවන් Links ${videoUrls.length} ක් හොයාගත්තා.`);
 
-          let extractedRawUrl = null;
+      // ---------------------------------------------------------
+      // STEP 2: Video පිටුවට යාම සහ එහි Title/Link එක ගැනීම
+      // ---------------------------------------------------------
+      let testUrls = videoUrls.slice(0, 3); // මුල්ම වීඩියෝ 3 විතරක් Test කරයි
 
-          // 1. Direct CDN Links
-          const cdnMatch = pageHtml.match(/href=["'](https?:\/\/[^"'\s]+\.(?:love|com|net|org|site|store|xyz|club)[^"'\s]*\.mp4[^"']*)["']/i);
+      for (const vUrl of testUrls) {
+        logs.push(`\n   ▶️ [STEP 2] Video පිටුව Check කරනවා...`);
+        logs.push(`      🔗 Video Link: ${vUrl}`);
+        
+        try {
+          const vRes = await fetch(vUrl, { headers });
+          const vHtml = await vRes.text();
           
-          // 2. <video src="..."> හෝ loadvideo/49355.mp4 Matches
-          const loadVideoMatch = pageHtml.match(/src=["']([^"']*\bloadvideo\/[^"']+\.mp4[^"']*)["']/i) || 
-                                 pageHtml.match(/src=["']([^"']+\.mp4(?:\?[^"']*)?)["']/i);
+          const vTitleMatch = vHtml.match(/<title[^>]*>(.*?)<\/title>/i) || vHtml.match(/<h1[^>]*>(.*?)<\/h1>/i);
+          const vTitle = vTitleMatch ? vTitleMatch[1].replace(/<[^>]+>/g, '').trim() : "Title එකක් නැත";
+          
+          logs.push(`      🏷️ Video Title: ${vTitle}`);
 
-          if (cdnMatch) {
-            extractedRawUrl = cdnMatch[1];
-          } else if (loadVideoMatch) {
-            extractedRawUrl = loadVideoMatch[1];
-          }
+          // ---------------------------------------------------------
+          // STEP 3: Direct MP4 එක හොයාගැනීම
+          // ---------------------------------------------------------
+          let finalMp4 = null;
+          
+          // විවිධ MP4 රටාවන් (Sources, Download links, Video tags)
+          const mp4Matches = [
+            vHtml.match(/src=["']([^"']*\.mp4[^"']*)["']/i),
+            vHtml.match(/href=["']([^"']*\.mp4[^"']*)["']/i),
+            vHtml.match(/["'](https?:\/\/[^"'\s]+\.mp4[^"']*)["']/i)
+          ];
 
-          if (extractedRawUrl) {
-            extractedRawUrl = extractedRawUrl.replace(/&amp;/g, '&');
-
-            let fullTargetUrl = extractedRawUrl;
-            if (extractedRawUrl.startsWith("./")) {
-              const pageOrigin = new URL(video.url).origin;
-              fullTargetUrl = `${pageOrigin}/${extractedRawUrl.replace(/^\.\//, '')}`;
-            } else if (!extractedRawUrl.startsWith("http://") && !extractedRawUrl.startsWith("https://")) {
-              fullTargetUrl = new URL(extractedRawUrl, video.url).href;
+          for (let match of mp4Matches) {
+            if (match && match[1]) {
+              finalMp4 = match[1].replace(/&amp;/g, '&');
+              break;
             }
-
-            // REDIRECT RESOLVER: CDN Link එක සෘජුව ලබාගැනීම
-            let finalMp4Url = fullTargetUrl;
-            try {
-              const headRes = await fetch(fullTargetUrl, {
-                method: "GET",
-                headers: { ...headers, "Range": "bytes=0-0" },
-                redirect: "follow"
-              });
-              
-              if (headRes.url && headRes.url.includes(".mp4")) {
-                finalMp4Url = headRes.url;
-              }
-            } catch (err) {}
-
-            if (isDiagnostic) logs.push(`   ✅ Direct MP4 Resolved: ${finalMp4Url}`);
-
-            const newItem = {
-              id: video.id,
-              title: title,
-              pageUrl: video.url,
-              directUrl: finalMp4Url,
-              pubDate: new Date().toUTCString()
-            };
-
-            newlyFetchedItems.push(newItem);
-            seenIds.push(video.id);
-
-            await sendNotifications(webhookUrls, newItem);
-          } else {
-            if (isDiagnostic) logs.push(`   ❌ MP4 Extraction failed for this page.`);
           }
-        } catch (err) {
-          if (isDiagnostic) logs.push(`   ❌ Inner Fetch Error: ${err.message}`);
+
+          if (finalMp4) {
+             // Relative URL එකක් නම් Full URL කිරීම
+             if (finalMp4.startsWith("./")) {
+               finalMp4 = `${new URL(vUrl).origin}/${finalMp4.replace(/^\.\//, '')}`;
+             } else if (!finalMp4.startsWith("http")) {
+               finalMp4 = new URL(finalMp4, vUrl).href;
+             }
+             logs.push(`      ✅ [STEP 3] Direct MP4 Link එක හොයාගත්තා: ${finalMp4}`);
+          } else {
+             logs.push(`      ❌ [STEP 3] මේ පිටුවේ Direct MP4 එකක් හොයාගන්න බැරි වුණා.`);
+          }
+
+        } catch (e) {
+          logs.push(`      ❌ Video පිටුවට යන්න බැරි වුණා: ${e.message}`);
         }
       }
     } catch (err) {
-      if (isDiagnostic) logs.push(`   ❌ Page Fetch Error: ${err.message}`);
+      logs.push(`❌ Main Page එකට යන්න බැරි වුණා: ${err.message}`);
     }
   }
 
-  if (newlyFetchedItems.length > 0) {
-    existingItems = [...newlyFetchedItems, ...existingItems].slice(0, 50);
-
-    if (seenIds.length > 500) {
-      seenIds = seenIds.slice(seenIds.length - 500);
-    }
-
-    await env.WOW_KV.put("seen_ids", JSON.stringify(seenIds));
-    await env.WOW_KV.put("feed_items", JSON.stringify(existingItems));
-  }
-
-  const rssXml = generateRssXml(existingItems);
-  await env.WOW_KV.put("rss_feed_xml", rssXml);
-
-  if (isDiagnostic) {
-    logs.push(`\n=== COMPLETED. New Videos Saved: ${newlyFetchedItems.length} ===`);
-    return logs;
-  }
-
-  return { rssXml };
-}
-
-async function sendNotifications(webhookUrls, item) {
-  if (!webhookUrls || webhookUrls.length === 0) return;
-
-  const discordPayload = {
-    content: item.directUrl
-  };
-
-  for (const url of webhookUrls) {
-    if (url.trim()) {
-      fetch(url.trim(), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(discordPayload)
-      }).catch(err => {});
-    }
-  }
-}
-
-function generateRssXml(items) {
-  const rssItems = items.map(item => {
-    return `
-    <item>
-      <title><![CDATA[${item.title}]]></title>
-      <link>${item.pageUrl}</link>
-      <guid isPermaLink="false">${item.id}</guid>
-      <pubDate>${item.pubDate}</pubDate>
-      <enclosure url="${item.directUrl.replace(/&/g, '&amp;')}" type="video/mp4" />
-      <description><![CDATA[Direct Video Link: <a href="${item.directUrl}">${item.directUrl}</a>]]></description>
-    </item>`;
-  }).join("");
-
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0">
-  <channel>
-    <title>Direct Video RSS Feed</title>
-    <link>https://github.com</link>
-    <description>Auto-updated RSS feed</description>
-    <language>en</language>
-    ${rssItems}
-  </channel>
-</rss>`;
+  logs.push(`\n=== 🏁 TEST COMPLETED ===`);
+  return logs;
 }
