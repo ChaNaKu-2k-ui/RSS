@@ -1,4 +1,4 @@
-name = "wow-rss-worker"
+name = "rss"
 main = "index.js"
 compatibility_date = "2026-08-13"
 
