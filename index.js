@@ -83,13 +83,19 @@ async function updateVideoFeed(env, isDiagnostic = false) {
       const html = await res.text();
       let matches = [...html.matchAll(linkRegex)];
 
-      if (isDiagnostic) logs.push(`   Found Video Page Links: ${matches.length}`);
+      if (isDiagnostic) logs.push(`   Found Raw Links: ${matches.length}`);
 
       let newVideosToProcess = [];
 
       for (const match of matches) {
         const rawPath = match[1];
         const videoId = match[2] || rawPath;
+
+        // 🛑 FILTERING: Category, Pagination, සහ Navigation links අතහැරීම
+        const isNavigationPage = /[\/](new|popular|top|best|trending|categories|tags|search|page[-\d]*|new_page.*|index)\.html?$/i.test(rawPath) || 
+                                 /^(new|popular|top|best|categories|search|index)$/i.test(videoId);
+
+        if (isNavigationPage) continue;
 
         if (!seenIds.includes(videoId)) {
           const origin = new URL(latestPageUrl).origin;
@@ -101,12 +107,12 @@ async function updateVideoFeed(env, isDiagnostic = false) {
         }
       }
 
-      if (isDiagnostic) logs.push(`   New Unprocessed Videos: ${newVideosToProcess.length}`);
+      if (isDiagnostic) logs.push(`   Filtered Single Video Pages to Process: ${newVideosToProcess.length}`);
 
       newVideosToProcess = newVideosToProcess.slice(0, 3);
 
       for (const video of newVideosToProcess) {
-        if (isDiagnostic) logs.push(`   Processing Inner Video: ${video.url}`);
+        if (isDiagnostic) logs.push(`   Processing Single Video: ${video.url}`);
 
         try {
           const pageRes = await fetch(video.url, { headers });
@@ -143,21 +149,19 @@ async function updateVideoFeed(env, isDiagnostic = false) {
               fullTargetUrl = new URL(extractedRawUrl, video.url).href;
             }
 
-            // 🚀 REDIRECT RESOLVER: Loadvideo Link එකෙන් Direct CDN MP4 එක ලබාගැනීම
+            // REDIRECT RESOLVER: Loadvideo Link එකෙන් Direct CDN MP4 එක ලබාගැනීම
             let finalMp4Url = fullTargetUrl;
             try {
               const headRes = await fetch(fullTargetUrl, {
                 method: "GET",
-                headers: { ...headers, "Range": "bytes=0-0" }, // පොඩි Request එකක් යවා Final URL එක ලබාගනී
+                headers: { ...headers, "Range": "bytes=0-0" },
                 redirect: "follow"
               });
               
               if (headRes.url && headRes.url.includes(".mp4")) {
                 finalMp4Url = headRes.url;
               }
-            } catch (err) {
-              // Redirect සොයාගැනීමට නොහැකි වුවහොත් Full Target URL එක භාවිතා කරයි
-            }
+            } catch (err) {}
 
             if (isDiagnostic) logs.push(`   ✅ Final Resolved MP4: ${finalMp4Url}`);
 
