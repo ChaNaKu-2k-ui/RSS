@@ -31,7 +31,7 @@ async function fetchGitHubTextFile(fileUrl) {
 
 async function updateVideoFeed(env, isDiagnostic = false) {
   let logs = [];
-  logs.push("=== 🕵️ STRICT VIDEO URL CRAWLER TEST ===");
+  logs.push("=== 🕵️ DEEP SOURCE SCANNER TEST ===");
 
   const headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -57,14 +57,7 @@ async function updateVideoFeed(env, isDiagnostic = false) {
       
       for (const match of allLinksMatch) {
         let link = match[1];
-        
-        // 🛑 STRICT FILTER: අනිවාර්යයෙන්ම URL එකේ ඉලක්කම් (ID එක) තියෙන්නම ඕනේ! (ඔයා කිව්ව විදිහට /video/අංකයක්)
-        // මේකෙන් Category/Models/Menu links ඔක්කොම අයින් වෙනවා.
-        if (!link.match(/\/\d{3,}/) && !link.match(/video\/\d+/i)) {
-           continue;
-        }
-
-        // අනවශ්‍ය පිටු තවත් දුරටත් අයින් කිරීම
+        if (!link.match(/\/\d{3,}/) && !link.match(/video\/\d+/i)) continue;
         if(link.match(/\.(jpg|png|css|js|ico)$/i)) continue;
         if(link.match(/(new|popular|top|categories|login|signup|tags|page-|models|xxx|\/search\/)/i)) continue; 
         if(link === "/" || link === "#" || link.startsWith("javascript")) continue;
@@ -80,7 +73,7 @@ async function updateVideoFeed(env, isDiagnostic = false) {
 
       logs.push(`   🔍 Video පිටු කියලා හරියටම Filter කරගත් Links ${videoUrls.length} ක් හොයාගත්තා.`);
 
-      let testUrls = videoUrls.slice(0, 3); // පළමු වීඩියෝ 3 විතරක් පරීක්ෂා කරමු
+      let testUrls = videoUrls.slice(0, 3); // පළමු වීඩියෝ 3
 
       for (const vUrl of testUrls) {
         logs.push(`\n   ▶️ [STEP 2] Video පිටුව Check කරනවා...`);
@@ -95,32 +88,48 @@ async function updateVideoFeed(env, isDiagnostic = false) {
           
           logs.push(`      🏷️ Video Title: ${vTitle}`);
 
+          // -------------------------------------------------------------
+          // DEEP SCAN: Raw Code එකේ හැමතැනම mp4 / loadvideo හෙවීම
+          // -------------------------------------------------------------
           let finalMp4 = null;
+          let matchedRawUrl = null;
+
+          // 1. loadvideo කෑල්ල තියෙන ඕනෑම ලින්ක් එකක් (JS ඇතුළේ තිබුණත් අල්ලයි)
+          let loadVideoMatches = [...vHtml.matchAll(/(?:'|")([^'"]*loadvideo[^'"]*)(?:'|")/gi)];
           
-          // විවිධ MP4 රටාවන් අල්ලා ගැනීම
-          const mp4Matches = [
-            vHtml.match(/src=["']([^"']*\bloadvideo\/[^"']+\.mp4[^"']*)["']/i),
-            vHtml.match(/href=["'](https?:\/\/[^"'\s]+\.mp4[^"']*)["']/i),
-            vHtml.match(/src=["']([^"']*\.mp4[^"']*)["']/i)
-          ];
+          // 2. .mp4 කෑල්ල තියෙන ඕනෑම ලින්ක් එකක්
+          let allMp4Matches = [...vHtml.matchAll(/(?:'|")([^'"]*\.mp4[^'"]*)(?:'|")/gi)];
+          
+          // 3. Iframe එකක් තියෙනවද බැලීම
+          let iframeMatches = [...vHtml.matchAll(/<iframe[^>]+src=["']([^"']+)["']/gi)];
 
-          for (let match of mp4Matches) {
-            if (match && match[1]) {
-              finalMp4 = match[1].replace(/&amp;/g, '&');
-              break;
-            }
+          if (loadVideoMatches.length > 0) {
+              matchedRawUrl = loadVideoMatches[0][1];
+              logs.push(`      ✅ [STEP 3] 'loadvideo' Link එකක් Source එකෙන් හොයාගත්තා!`);
+          } else if (allMp4Matches.length > 0) {
+              matchedRawUrl = allMp4Matches[0][1];
+              logs.push(`      ✅ [STEP 3] සාමාන්‍ය '.mp4' Link එකක් Source එකෙන් හොයාගත්තා!`);
           }
-
-          if (finalMp4) {
-             // Relative URL එකක් නම් Full URL කිරීම
-             if (finalMp4.startsWith("./")) {
-               finalMp4 = `${new URL(vUrl).origin}/${finalMp4.replace(/^\.\//, '')}`;
-             } else if (!finalMp4.startsWith("http")) {
-               finalMp4 = new URL(finalMp4, vUrl).href;
+          
+          if (matchedRawUrl) {
+             matchedRawUrl = matchedRawUrl.replace(/&amp;/g, '&');
+             
+             // ලින්ක් එක සම්පූර්ණ කිරීම
+             if (matchedRawUrl.startsWith("./")) {
+               finalMp4 = `${new URL(vUrl).origin}/${matchedRawUrl.replace(/^\.\//, '')}`;
+             } else if (!matchedRawUrl.startsWith("http")) {
+               finalMp4 = new URL(matchedRawUrl, vUrl).href;
+             } else {
+               finalMp4 = matchedRawUrl;
              }
-             logs.push(`      ✅ [STEP 3] Direct MP4 Link එක හොයාගත්තා: ${finalMp4}`);
+             
+             logs.push(`         👉 Raw Extracted: ${matchedRawUrl}`);
+             logs.push(`         🚀 Full Direct Link: ${finalMp4}`);
+             
+          } else if (iframeMatches.length > 0) {
+             logs.push(`      ⚠️ [STEP 3] MP4 එකක් නෑ. හැබැයි Iframe එකක් තියෙනවා: ${iframeMatches[0][1]}`);
           } else {
-             logs.push(`      ❌ [STEP 3] මේ පිටුවේ Direct MP4 එකක් හොයාගන්න බැරි වුණා.`);
+             logs.push(`      ❌ [STEP 3] MP4 / loadvideo මුකුත්ම Raw Source එකේ නෑ. JS වලින් එනවා වෙන්න ඇති.`);
           }
 
         } catch (e) {
