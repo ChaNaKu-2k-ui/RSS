@@ -68,7 +68,6 @@ async function updateVideoFeed(env, isDiagnostic = false) {
   let seenIds = (await env.WOW_KV.get("seen_ids", "json")) || [];
   let existingItems = (await env.WOW_KV.get("feed_items", "json")) || [];
 
-  // JilHub/KVS ලින්ක්ස් අල්ලන Regex එක
   const linkRegex = /href=["']((?:https?:\/\/[^"']*)?\/(?:videos?|watch|embed|view|play|v)\/([0-9a-zA-Z_-]+)[^"']*)["']/gi;
 
   let newlyFetchedItems = [];
@@ -119,26 +118,35 @@ async function updateVideoFeed(env, isDiagnostic = false) {
 
           let videoDirectUrl = null;
 
-          // 1. <video src="..."> හෝ <source src="..."> ටැග් එකෙන් MP4 Link එක ගැනීම
-          const videoTagMatch = pageHtml.match(/<(?:video|source)[^>]+src=["']([^"']+\.mp4[^"']*)["']/i);
+          // 1. Static HTML / JS ඇතුළේ තියෙන KVS /get_file/ Path එක අල්ලා ගැනීම
+          const kvsFileMatch = pageHtml.match(/["']((?:https?:\/\/[^"'\s]+)?\/get_file\/[^\s"']+)["']/i);
           
-          // 2. KVS /get_file/ Path Match එක
-          const getFileMatch = pageHtml.match(/src=["'](https?:\/\/[^"']+\/get_file\/[^"']+\.mp4[^"']*)["']/i);
+          // 2. JS Variables (video_url, video_alt_url, file, etc.)
+          const jsVarMatch = pageHtml.match(/(?:video_url|video_alt_url|file|src)\s*:\s*["']([^"']+\.mp4[^"']*)["']/i);
+          
+          // 3. HTML Tag Matcher
+          const tagMatch = pageHtml.match(/<(?:video|source)[^>]+src=["']([^"']+\.mp4[^"']*)["']/i);
 
-          if (videoTagMatch) {
-            videoDirectUrl = videoTagMatch[1];
-          } else if (getFileMatch) {
-            videoDirectUrl = getFileMatch[1];
+          if (kvsFileMatch) {
+            videoDirectUrl = kvsFileMatch[1];
+          } else if (jsVarMatch) {
+            videoDirectUrl = jsVarMatch[1];
+          } else if (tagMatch) {
+            videoDirectUrl = tagMatch[1];
           }
 
           if (videoDirectUrl) {
-            if (videoDirectUrl.startsWith("//")) videoDirectUrl = "https:" + videoDirectUrl;
-            
-            // 🛑 Discord Player එක සඳහා URL එක Clean කිරීම:
-            // .mp4 එකට පසුව එන /?rnd=123445 වැනි සියලු කෑලි අයින් කර කෙළින්ම .mp4 වලින් නිමා කරයි
+            const origin = new URL(video.url).origin;
+            if (videoDirectUrl.startsWith("//")) {
+              videoDirectUrl = "https:" + videoDirectUrl;
+            } else if (videoDirectUrl.startsWith("/")) {
+              videoDirectUrl = `${origin}${videoDirectUrl}`;
+            }
+
+            // Clean .mp4 URL (/?rnd=... වැනි අමතර කොටස් අයින් කරයි)
             videoDirectUrl = videoDirectUrl.replace(/(\.mp4)[\/?].*$/i, "$1");
 
-            if (isDiagnostic) logs.push(`   ✅ Clean MP4 Found: ${videoDirectUrl}`);
+            if (isDiagnostic) logs.push(`   ✅ Direct MP4 Link Found: ${videoDirectUrl}`);
 
             const newItem = {
               id: video.id,
@@ -189,7 +197,6 @@ async function updateVideoFeed(env, isDiagnostic = false) {
 async function sendNotifications(webhookUrls, item) {
   if (!webhookUrls || webhookUrls.length === 0) return;
 
-  // Discord එකට Embeds නැතිව Direct URL එක විතරක් Plain Text ලෙස යවයි
   const discordPayload = {
     content: item.directUrl
   };
@@ -228,4 +235,4 @@ function generateRssXml(items) {
     ${rssItems}
   </channel>
 </rss>`;
-              }
+            }
