@@ -70,7 +70,7 @@ async function updateVideoFeed(env) {
       const res = await fetch(latestPageUrl, { headers });
       const html = await res.text();
 
-      const linkRegex = /href=["'](\/(?:video|watch|embed)\/([0-9a-zA-Z_-]+)[^"']*)["']/gi;
+      const linkRegex = /href=["'](\/(?:videos?|watch|embed|view|play|v)\/([0-9a-zA-Z_-]+)[^"']*)["']/gi;
       let matches = [...html.matchAll(linkRegex)];
 
       let newVideosToProcess = [];
