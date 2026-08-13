@@ -48,7 +48,7 @@ async function fetchGitHubTextFile(fileUrl) {
 
 async function updateVideoFeed(env, isDiagnostic = false) {
   let logs = [];
-  if (isDiagnostic) logs.push("=== STARTING DIRECT MP4 RSS DIAGNOSTIC ===");
+  if (isDiagnostic) logs.push("=== STARTING CDN / DOWNLOAD LINK RSS DIAGNOSTIC ===");
 
   const headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -67,7 +67,7 @@ async function updateVideoFeed(env, isDiagnostic = false) {
   let seenIds = (await env.WOW_KV.get("seen_ids", "json")) || [];
   let existingItems = (await env.WOW_KV.get("feed_items", "json")) || [];
 
-  // Video Links Regex (පිටුවේ තියෙන වීඩියෝ ලින්ක්ස් අල්ලයි)
+  // Main Page එකේ වීඩියෝ ලින්ක්ස් සොයාගැනීමේ Regex එක
   const linkRegex = /href=["']((?:https?:\/\/[^"']*)?\/(?:videos?|watch|embed|view|play|v|post)\/([0-9a-zA-Z_-]+)[^"']*)["']/gi;
 
   let newlyFetchedItems = [];
@@ -118,29 +118,43 @@ async function updateVideoFeed(env, isDiagnostic = false) {
 
           let videoDirectUrl = null;
 
-          // 1. Image එකේ පෙනෙන Relative loadvideo/49355.mp4 pattern එක හෝ Direct MP4 Matcher එක
-          const mp4SrcMatch = pageHtml.match(/src=["']([^"']*\bloadvideo\/[^"']+\.mp4[^"']*|[^"']+\.mp4(?:\?[^"']*)?)["']/i);
+          // 🎯 1. Download Buttons / CDN Links Regex (720p, 360p, static CDN links)
+          // HTML එකේ ඇති href="https://xp-static...mp4" හෝ download links අල්ලා ගනී
+          const downloadRegexes = [
+            // CDN MP4 URLs (xp-static, cdn, static, vds ආදී CDN domain වලින් එන mp4)
+            /href=["'](https?:\/\/[^"'\s]+\.(?:love|com|net|org|site|store|xyz|club)[^"'\s]*\.mp4[^"']*)["']/i,
+            
+            // Download option links containing 720p, 360p, 1080p, HD or Download
+            /<a[^>]+href=["']([^"']+\.mp4[^"']*)["'][^>]*>(?:.*?(?:720p|360p|1080p|480p|HD|Download).*?)<\/a>/i,
 
-          if (mp4SrcMatch) {
-            videoDirectUrl = mp4SrcMatch[1];
+            // JS Configuration quality objects: "720p": "https://..."
+            /["'](?:720p|360p|1080p|low|high|file|url)["']\s*:\s*["'](https?:\/\/[^"']+\.mp4[^"']*)["']/i,
+
+            // Any Direct HTTPS MP4 URL on CDN
+            /["'](https?:\/\/[^"'\s]+static[^"'\s]*\.mp4[^"']*)["']/i
+          ];
+
+          for (const regex of downloadRegexes) {
+            const match = pageHtml.match(regex);
+            if (match && match[1]) {
+              videoDirectUrl = match[1];
+              break;
+            }
+          }
+
+          // Fallback: If no CDN link found, look for general mp4 link
+          if (!videoDirectUrl) {
+            const generalMp4 = pageHtml.match(/href=["']([^"']+\.mp4(?:\?[^"']*)?)["']/i);
+            if (generalMp4) videoDirectUrl = generalMp4[1];
           }
 
           if (videoDirectUrl) {
-            const pageObj = new URL(video.url);
-
-            // Relative Path (../ හෝ /) Absolute URL එකක් බවට පත් කිරීම
-            if (videoDirectUrl.startsWith("http://") || videoDirectUrl.startsWith("https://")) {
-              // දැනටමත් Full URL එකක්
-            } else if (videoDirectUrl.startsWith("//")) {
-              videoDirectUrl = "https:" + videoDirectUrl;
-            } else if (videoDirectUrl.startsWith("/")) {
-              videoDirectUrl = `${pageObj.origin}${videoDirectUrl}`;
-            } else {
-              // ../ හෝ relative paths සඳහා
+            // Absolute URL බවට පත්කිරීම
+            if (!videoDirectUrl.startsWith("http://") && !videoDirectUrl.startsWith("https://")) {
               videoDirectUrl = new URL(videoDirectUrl, video.url).href;
             }
 
-            if (isDiagnostic) logs.push(`   ✅ Direct MP4 Link Found: ${videoDirectUrl}`);
+            if (isDiagnostic) logs.push(`   ✅ Direct CDN MP4 Found: ${videoDirectUrl}`);
 
             const newItem = {
               id: video.id,
@@ -155,7 +169,7 @@ async function updateVideoFeed(env, isDiagnostic = false) {
 
             await sendNotifications(webhookUrls, newItem);
           } else {
-            if (isDiagnostic) logs.push(`   ❌ MP4 Link extraction failed for this page.`);
+            if (isDiagnostic) logs.push(`   ❌ CDN/Download MP4 Link extraction failed for this page.`);
           }
         } catch (err) {
           if (isDiagnostic) logs.push(`   ❌ Inner Fetch Error: ${err.message}`);
@@ -230,3 +244,4 @@ function generateRssXml(items) {
   </channel>
 </rss>`;
 }
+
