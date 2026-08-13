@@ -9,19 +9,17 @@ export default {
 
     const url = new URL(request.url);
 
-    // ?sync=true
+    // ?sync=true ගැහුවාම Diagnostic Report එකක් පෙන්වයි
     if (url.searchParams.get("sync") === "true") {
-      const { newVideosFound, processedCount } = await updateVideoFeed(env);
-      if (newVideosFound) {
-        return new Response(`Manual Sync Completed! New videos processed: ${processedCount}`);
-      } else {
-        return new Response("No new videos found.");
-      }
+      const logs = await updateVideoFeed(env, true);
+      return new Response(logs.join("\n"), {
+        headers: { "Content-Type": "text/plain; charset=utf-8" }
+      });
     }
 
     let feedXml = await env.WOW_KV.get("rss_feed_xml");
     if (!feedXml) {
-      const result = await updateVideoFeed(env);
+      const result = await updateVideoFeed(env, false);
       feedXml = result.rssXml;
     }
 
@@ -34,7 +32,7 @@ export default {
   },
 
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(updateVideoFeed(env));
+    ctx.waitUntil(updateVideoFeed(env, false));
   }
 };
 
@@ -45,64 +43,100 @@ async function fetchGitHubTextFile(fileUrl) {
     const text = await res.text();
     return text.split("\n").map(l => l.trim()).filter(l => l.length > 0 && !l.startsWith("#"));
   } catch (err) {
-    console.error(`Error fetching file from ${fileUrl}:`, err);
     return [];
   }
 }
 
-async function updateVideoFeed(env) {
+async function updateVideoFeed(env, isDiagnostic = false) {
+  let logs = [];
+  if (isDiagnostic) logs.push("=== STARTING KVS / WOW RSS DIAGNOSTIC ===");
+
   const headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept-Language": "en-US,en;q=0.9",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9"
   };
 
   const targetPages = await fetchGitHubTextFile(GITHUB_URLS_RAW);
   const webhookUrls = await fetchGitHubTextFile(GITHUB_WEBHOOKS_RAW);
 
+  if (isDiagnostic) {
+    logs.push(`1. GitHub Target URLs: ${targetPages.length}`);
+    logs.push(`2. GitHub Webhooks: ${webhookUrls.length}`);
+  }
+
   let seenIds = (await env.WOW_KV.get("seen_ids", "json")) || [];
   let existingItems = (await env.WOW_KV.get("feed_items", "json")) || [];
 
-  let newVideosFound = false;
+  // /videos/ලින්ක්ස් අල්ලන Regex එක
+  const linkRegex = /href=["']((?:https?:\/\/[^"']*)?\/(?:videos?|watch|embed|view|play|v)\/([0-9a-zA-Z_-]+)[^"']*)["']/gi;
+
   let newlyFetchedItems = [];
 
   for (const latestPageUrl of targetPages) {
+    if (isDiagnostic) logs.push(`\n--- Fetching Page: ${latestPageUrl} ---`);
+
     try {
       const res = await fetch(latestPageUrl, { headers });
-      const html = await res.text();
+      if (isDiagnostic) logs.push(`   Status Code: ${res.status}`);
 
-      const linkRegex = /href=["'](\/(?:videos?|watch|embed|view|play|v)\/([0-9a-zA-Z_-]+)[^"']*)["']/gi;
+      if (!res.ok) continue;
+
+      const html = await res.text();
       let matches = [...html.matchAll(linkRegex)];
+
+      if (isDiagnostic) logs.push(`   Found Video Page Links: ${matches.length}`);
 
       let newVideosToProcess = [];
 
       for (const match of matches) {
-        const fullPath = match[1];
-        const videoId = match[2] || fullPath;
+        const rawPath = match[1];
+        const videoId = match[2] || rawPath;
 
         if (!seenIds.includes(videoId)) {
           const origin = new URL(latestPageUrl).origin;
-          const fullUrl = fullPath.startsWith("http") ? fullPath : `${origin}${fullPath}`;
-          newVideosToProcess.push({ id: videoId, url: fullUrl });
+          const fullUrl = rawPath.startsWith("http") ? rawPath : `${origin}${rawPath}`;
+          
+          // Duplicate URL නොවෙන සේ එකතු කිරීම
+          if (!newVideosToProcess.some(v => v.url === fullUrl)) {
+            newVideosToProcess.push({ id: videoId, url: fullUrl });
+          }
         }
       }
 
-      newVideosToProcess = newVideosToProcess.slice(0, 3);
+      if (isDiagnostic) logs.push(`   New Unprocessed Videos: ${newVideosToProcess.length}`);
+
+      newVideosToProcess = newVideosToProcess.slice(0, 3); // එකවර 3ක් process කරයි
 
       for (const video of newVideosToProcess) {
+        if (isDiagnostic) logs.push(`   Processing Inner Video: ${video.url}`);
+
         try {
           const pageRes = await fetch(video.url, { headers });
           const pageHtml = await pageRes.text();
 
+          // Title එක අල්ලමු
           const titleMatch = pageHtml.match(/<title>(.*?)<\/title>/i) || pageHtml.match(/<h1[^>]*>(.*?)<\/h1>/i);
           let title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').replace(/ - WOW\.xxx/i, '').trim() : `Video ${video.id}`;
 
           let videoDirectUrl = null;
-          const sourceMatch = pageHtml.match(/<(?:source|video)[^>]+src=["']([^"']+\.(?:mp4|m3u8)[^"']*)["']/i);
-          const jsMatch = pageHtml.match(/(?:video_url|file|videoUrl)\s*:\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']/i) ||
-                          pageHtml.match(/["'](https?:\/\/[^"']+\.(?:mp4|m3u8)(?:\?[^"']*)?)["']/i);
 
-          if (sourceMatch) videoDirectUrl = sourceMatch[1];
-          else if (jsMatch) videoDirectUrl = jsMatch[1];
+          // 1. KVS /get_file/ .mp4/ Regex එක (720p, 1080p, etc.)
+          const getFileMatch = pageHtml.match(/src=["'](https?:\/\/[^"']+\/get_file\/[^"']+\.mp4\/?)/i);
+          
+          // 2. Generic Source / Video Tag Regex ( .mp4/ හෝ .mp4 සලකයි)
+          const sourceMatch = pageHtml.match(/<(?:source|video)[^>]+src=["']([^"']+\.(?:mp4|m3u8)\/?[^"']*)["']/i);
+
+          if (getFileMatch) {
+            videoDirectUrl = getFileMatch[1];
+          } else if (sourceMatch) {
+            videoDirectUrl = sourceMatch[1];
+          }
+
+          if (isDiagnostic) {
+            if (videoDirectUrl) logs.push(`   ✅ Direct MP4 Link Found: ${videoDirectUrl}`);
+            else logs.push(`   ❌ MP4 Link extraction failed for this page.`);
+          }
 
           if (videoDirectUrl) {
             if (videoDirectUrl.startsWith("//")) videoDirectUrl = "https:" + videoDirectUrl;
@@ -121,16 +155,15 @@ async function updateVideoFeed(env) {
             await sendNotifications(webhookUrls, newItem);
           }
         } catch (err) {
-          console.error(`Error processing video ${video.url}:`, err);
+          if (isDiagnostic) logs.push(`   ❌ Inner Fetch Error: ${err.message}`);
         }
       }
     } catch (err) {
-      console.error(`Error processing page ${latestPageUrl}:`, err);
+      if (isDiagnostic) logs.push(`   ❌ Page Fetch Error: ${err.message}`);
     }
   }
 
   if (newlyFetchedItems.length > 0) {
-    newVideosFound = true;
     existingItems = [...newlyFetchedItems, ...existingItems].slice(0, 50);
 
     if (seenIds.length > 500) {
@@ -144,7 +177,12 @@ async function updateVideoFeed(env) {
   const rssXml = generateRssXml(existingItems);
   await env.WOW_KV.put("rss_feed_xml", rssXml);
 
-  return { rssXml, newVideosFound, processedCount: newlyFetchedItems.length };
+  if (isDiagnostic) {
+    logs.push(`\n=== COMPLETED. New Videos Saved: ${newlyFetchedItems.length} ===`);
+    return logs;
+  }
+
+  return { rssXml };
 }
 
 async function sendNotifications(webhookUrls, item) {
@@ -167,23 +205,20 @@ async function sendNotifications(webhookUrls, item) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(discordPayload)
-      }).catch(err => console.error("Discord Error:", err));
+      }).catch(err => {});
     }
   }
 }
 
 function generateRssXml(items) {
   const rssItems = items.map(item => {
-    const isMp4 = item.directUrl.includes(".mp4");
-    const mimeType = isMp4 ? "video/mp4" : "application/x-mpegURL";
-
     return `
     <item>
       <title><![CDATA[${item.title}]]></title>
       <link>${item.pageUrl}</link>
       <guid isPermaLink="false">${item.id}</guid>
       <pubDate>${item.pubDate}</pubDate>
-      <enclosure url="${item.directUrl.replace(/&/g, '&amp;')}" type="${mimeType}" />
+      <enclosure url="${item.directUrl.replace(/&/g, '&amp;')}" type="video/mp4" />
       <description><![CDATA[Direct Video Link: <a href="${item.directUrl}">${item.directUrl}</a>]]></description>
     </item>`;
   }).join("");
