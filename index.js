@@ -68,7 +68,7 @@ async function updateVideoFeed(env, isDiagnostic = false) {
   let seenIds = (await env.WOW_KV.get("seen_ids", "json")) || [];
   let existingItems = (await env.WOW_KV.get("feed_items", "json")) || [];
 
-  // /videos/ලින්ක්ස් අල්ලන Regex එක
+  // /videos/ ලින්ක්ස් අල්ලන Regex එක
   const linkRegex = /href=["']((?:https?:\/\/[^"']*)?\/(?:videos?|watch|embed|view|play|v)\/([0-9a-zA-Z_-]+)[^"']*)["']/gi;
 
   let newlyFetchedItems = [];
@@ -97,7 +97,6 @@ async function updateVideoFeed(env, isDiagnostic = false) {
           const origin = new URL(latestPageUrl).origin;
           const fullUrl = rawPath.startsWith("http") ? rawPath : `${origin}${rawPath}`;
           
-          // Duplicate URL නොවෙන සේ එකතු කිරීම
           if (!newVideosToProcess.some(v => v.url === fullUrl)) {
             newVideosToProcess.push({ id: videoId, url: fullUrl });
           }
@@ -115,16 +114,12 @@ async function updateVideoFeed(env, isDiagnostic = false) {
           const pageRes = await fetch(video.url, { headers });
           const pageHtml = await pageRes.text();
 
-          // Title එක අල්ලමු
           const titleMatch = pageHtml.match(/<title>(.*?)<\/title>/i) || pageHtml.match(/<h1[^>]*>(.*?)<\/h1>/i);
           let title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').replace(/ - WOW\.xxx/i, '').trim() : `Video ${video.id}`;
 
           let videoDirectUrl = null;
 
-          // 1. KVS /get_file/ .mp4/ Regex එක (720p, 1080p, etc.)
           const getFileMatch = pageHtml.match(/src=["'](https?:\/\/[^"']+\/get_file\/[^"']+\.mp4\/?)/i);
-          
-          // 2. Generic Source / Video Tag Regex ( .mp4/ හෝ .mp4 සලකයි)
           const sourceMatch = pageHtml.match(/<(?:source|video)[^>]+src=["']([^"']+\.(?:mp4|m3u8)\/?[^"']*)["']/i);
 
           if (getFileMatch) {
@@ -133,13 +128,13 @@ async function updateVideoFeed(env, isDiagnostic = false) {
             videoDirectUrl = sourceMatch[1];
           }
 
-          if (isDiagnostic) {
-            if (videoDirectUrl) logs.push(`   ✅ Direct MP4 Link Found: ${videoDirectUrl}`);
-            else logs.push(`   ❌ MP4 Link extraction failed for this page.`);
-          }
-
           if (videoDirectUrl) {
             if (videoDirectUrl.startsWith("//")) videoDirectUrl = "https:" + videoDirectUrl;
+            
+            // Discord Player එකට බාධාවක් වන අග ඇති '/' අයින් කරයි (.mp4/ -> .mp4)
+            videoDirectUrl = videoDirectUrl.replace(/\/$/, "");
+
+            if (isDiagnostic) logs.push(`   ✅ Direct MP4 Link Found: ${videoDirectUrl}`);
 
             const newItem = {
               id: video.id,
@@ -153,6 +148,8 @@ async function updateVideoFeed(env, isDiagnostic = false) {
             seenIds.push(video.id);
 
             await sendNotifications(webhookUrls, newItem);
+          } else {
+            if (isDiagnostic) logs.push(`   ❌ MP4 Link extraction failed for this page.`);
           }
         } catch (err) {
           if (isDiagnostic) logs.push(`   ❌ Inner Fetch Error: ${err.message}`);
@@ -188,15 +185,10 @@ async function updateVideoFeed(env, isDiagnostic = false) {
 async function sendNotifications(webhookUrls, item) {
   if (!webhookUrls || webhookUrls.length === 0) return;
 
+  // Discord එකට Embeds නැතිව Direct URL එක විතරක් Plain Text ලෙස යවයි
+  // එවිට Discord එකෙන් ස්වයංක්‍රීයව Video Player එකක් සාදා දෙයි
   const discordPayload = {
-    embeds: [{
-      title: item.title,
-      url: item.pageUrl,
-      color: 5814783,
-      fields: [{ name: "🎬 Direct Link", value: `\`\`\`${item.directUrl}\`\`\`` }],
-      footer: { text: "Auto Video Bot" },
-      timestamp: new Date().toISOString()
-    }]
+    content: item.directUrl
   };
 
   for (const url of webhookUrls) {
