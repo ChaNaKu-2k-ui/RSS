@@ -49,7 +49,7 @@ async function fetchGitHubTextFile(fileUrl) {
 
 async function updateVideoFeed(env, isDiagnostic = false) {
   let logs = [];
-  if (isDiagnostic) logs.push("=== STARTING KVS / WOW RSS DIAGNOSTIC ===");
+  if (isDiagnostic) logs.push("=== STARTING JILHUB / KVS RSS DIAGNOSTIC ===");
 
   const headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -68,7 +68,7 @@ async function updateVideoFeed(env, isDiagnostic = false) {
   let seenIds = (await env.WOW_KV.get("seen_ids", "json")) || [];
   let existingItems = (await env.WOW_KV.get("feed_items", "json")) || [];
 
-  // /videos/ ලින්ක්ස් අල්ලන Regex එක
+  // JilHub/KVS ලින්ක්ස් අල්ලන Regex එක
   const linkRegex = /href=["']((?:https?:\/\/[^"']*)?\/(?:videos?|watch|embed|view|play|v)\/([0-9a-zA-Z_-]+)[^"']*)["']/gi;
 
   let newlyFetchedItems = [];
@@ -115,26 +115,30 @@ async function updateVideoFeed(env, isDiagnostic = false) {
           const pageHtml = await pageRes.text();
 
           const titleMatch = pageHtml.match(/<title>(.*?)<\/title>/i) || pageHtml.match(/<h1[^>]*>(.*?)<\/h1>/i);
-          let title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').replace(/ - WOW\.xxx/i, '').trim() : `Video ${video.id}`;
+          let title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').replace(/ - JilHub/i, '').trim() : `Video ${video.id}`;
 
           let videoDirectUrl = null;
 
-          const getFileMatch = pageHtml.match(/src=["'](https?:\/\/[^"']+\/get_file\/[^"']+\.mp4\/?)/i);
-          const sourceMatch = pageHtml.match(/<(?:source|video)[^>]+src=["']([^"']+\.(?:mp4|m3u8)\/?[^"']*)["']/i);
+          // 1. <video src="..."> හෝ <source src="..."> ටැග් එකෙන් MP4 Link එක ගැනීම
+          const videoTagMatch = pageHtml.match(/<(?:video|source)[^>]+src=["']([^"']+\.mp4[^"']*)["']/i);
+          
+          // 2. KVS /get_file/ Path Match එක
+          const getFileMatch = pageHtml.match(/src=["'](https?:\/\/[^"']+\/get_file\/[^"']+\.mp4[^"']*)["']/i);
 
-          if (getFileMatch) {
+          if (videoTagMatch) {
+            videoDirectUrl = videoTagMatch[1];
+          } else if (getFileMatch) {
             videoDirectUrl = getFileMatch[1];
-          } else if (sourceMatch) {
-            videoDirectUrl = sourceMatch[1];
           }
 
           if (videoDirectUrl) {
             if (videoDirectUrl.startsWith("//")) videoDirectUrl = "https:" + videoDirectUrl;
             
-            // Discord Player එකට බාධාවක් වන අග ඇති '/' අයින් කරයි (.mp4/ -> .mp4)
-            videoDirectUrl = videoDirectUrl.replace(/\/$/, "");
+            // 🛑 Discord Player එක සඳහා URL එක Clean කිරීම:
+            // .mp4 එකට පසුව එන /?rnd=123445 වැනි සියලු කෑලි අයින් කර කෙළින්ම .mp4 වලින් නිමා කරයි
+            videoDirectUrl = videoDirectUrl.replace(/(\.mp4)[\/?].*$/i, "$1");
 
-            if (isDiagnostic) logs.push(`   ✅ Direct MP4 Link Found: ${videoDirectUrl}`);
+            if (isDiagnostic) logs.push(`   ✅ Clean MP4 Found: ${videoDirectUrl}`);
 
             const newItem = {
               id: video.id,
@@ -186,7 +190,6 @@ async function sendNotifications(webhookUrls, item) {
   if (!webhookUrls || webhookUrls.length === 0) return;
 
   // Discord එකට Embeds නැතිව Direct URL එක විතරක් Plain Text ලෙස යවයි
-  // එවිට Discord එකෙන් ස්වයංක්‍රීයව Video Player එකක් සාදා දෙයි
   const discordPayload = {
     content: item.directUrl
   };
@@ -225,4 +228,4 @@ function generateRssXml(items) {
     ${rssItems}
   </channel>
 </rss>`;
-}
+              }
