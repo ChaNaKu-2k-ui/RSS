@@ -31,7 +31,7 @@ async function fetchGitHubTextFile(fileUrl) {
 
 async function updateVideoFeed(env, isDiagnostic = false) {
   let logs = [];
-  logs.push("=== 🕵️ VIDEO CRAWLER DIAGNOSTIC TEST ===");
+  logs.push("=== 🕵️ STRICT VIDEO URL CRAWLER TEST ===");
 
   const headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -43,9 +43,6 @@ async function updateVideoFeed(env, isDiagnostic = false) {
   
   for (const latestPageUrl of targetPages) {
     try {
-      // ---------------------------------------------------------
-      // STEP 1: Main URL එකට යාම සහ Title එක ගැනීම
-      // ---------------------------------------------------------
       const res = await fetch(latestPageUrl, { headers });
       const html = await res.text();
       
@@ -55,14 +52,21 @@ async function updateVideoFeed(env, isDiagnostic = false) {
       logs.push(`\n👉 [STEP 1] Main URL එකට ගියා: ${latestPageUrl}`);
       logs.push(`   📌 Main Page Title: ${mainTitle}`);
 
-      // Video Links හොයාගැනීම (Category / New / Popular වගේ ඒවා අයින් කරලා)
       const allLinksMatch = [...html.matchAll(/<a[^>]+href=["']([^"']+)["']/gi)];
       let videoUrls = [];
       
       for (const match of allLinksMatch) {
         let link = match[1];
+        
+        // 🛑 STRICT FILTER: අනිවාර්යයෙන්ම URL එකේ ඉලක්කම් (ID එක) තියෙන්නම ඕනේ! (ඔයා කිව්ව විදිහට /video/අංකයක්)
+        // මේකෙන් Category/Models/Menu links ඔක්කොම අයින් වෙනවා.
+        if (!link.match(/\/\d{3,}/) && !link.match(/video\/\d+/i)) {
+           continue;
+        }
+
+        // අනවශ්‍ය පිටු තවත් දුරටත් අයින් කිරීම
         if(link.match(/\.(jpg|png|css|js|ico)$/i)) continue;
-        if(link.match(/(new|popular|top|categories|login|signup|tags|page-)/i)) continue; // Navigation පිටු අයින් කරයි
+        if(link.match(/(new|popular|top|categories|login|signup|tags|page-|models|xxx|\/search\/)/i)) continue; 
         if(link === "/" || link === "#" || link.startsWith("javascript")) continue;
 
         try {
@@ -74,12 +78,9 @@ async function updateVideoFeed(env, isDiagnostic = false) {
         } catch(e){}
       }
 
-      logs.push(`   🔍 Video පිටු කියලා හිතන්න පුළුවන් Links ${videoUrls.length} ක් හොයාගත්තා.`);
+      logs.push(`   🔍 Video පිටු කියලා හරියටම Filter කරගත් Links ${videoUrls.length} ක් හොයාගත්තා.`);
 
-      // ---------------------------------------------------------
-      // STEP 2: Video පිටුවට යාම සහ එහි Title/Link එක ගැනීම
-      // ---------------------------------------------------------
-      let testUrls = videoUrls.slice(0, 3); // මුල්ම වීඩියෝ 3 විතරක් Test කරයි
+      let testUrls = videoUrls.slice(0, 3); // පළමු වීඩියෝ 3 විතරක් පරීක්ෂා කරමු
 
       for (const vUrl of testUrls) {
         logs.push(`\n   ▶️ [STEP 2] Video පිටුව Check කරනවා...`);
@@ -94,16 +95,13 @@ async function updateVideoFeed(env, isDiagnostic = false) {
           
           logs.push(`      🏷️ Video Title: ${vTitle}`);
 
-          // ---------------------------------------------------------
-          // STEP 3: Direct MP4 එක හොයාගැනීම
-          // ---------------------------------------------------------
           let finalMp4 = null;
           
-          // විවිධ MP4 රටාවන් (Sources, Download links, Video tags)
+          // විවිධ MP4 රටාවන් අල්ලා ගැනීම
           const mp4Matches = [
-            vHtml.match(/src=["']([^"']*\.mp4[^"']*)["']/i),
-            vHtml.match(/href=["']([^"']*\.mp4[^"']*)["']/i),
-            vHtml.match(/["'](https?:\/\/[^"'\s]+\.mp4[^"']*)["']/i)
+            vHtml.match(/src=["']([^"']*\bloadvideo\/[^"']+\.mp4[^"']*)["']/i),
+            vHtml.match(/href=["'](https?:\/\/[^"'\s]+\.mp4[^"']*)["']/i),
+            vHtml.match(/src=["']([^"']*\.mp4[^"']*)["']/i)
           ];
 
           for (let match of mp4Matches) {
