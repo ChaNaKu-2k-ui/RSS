@@ -1,7 +1,0 @@
-name = "rss"
-main = "index.js"
-compatibility_date = "2026-08-13"
-
-[[kv_namespaces]]
-binding = "WOW_KV"
-id = "89675927e7354969b708b7bd4b9cb166"
