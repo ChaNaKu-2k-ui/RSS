@@ -9,7 +9,6 @@ export default {
 
     const url = new URL(request.url);
 
-    // ?sync=true ගැහුවාම Diagnostic Report එකක් පෙන්වයි
     if (url.searchParams.get("sync") === "true") {
       const logs = await updateVideoFeed(env, true);
       return new Response(logs.join("\n"), {
@@ -49,7 +48,7 @@ async function fetchGitHubTextFile(fileUrl) {
 
 async function updateVideoFeed(env, isDiagnostic = false) {
   let logs = [];
-  if (isDiagnostic) logs.push("=== STARTING JILHUB / KVS RSS DIAGNOSTIC ===");
+  if (isDiagnostic) logs.push("=== STARTING DIRECT MP4 RSS DIAGNOSTIC ===");
 
   const headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -68,7 +67,8 @@ async function updateVideoFeed(env, isDiagnostic = false) {
   let seenIds = (await env.WOW_KV.get("seen_ids", "json")) || [];
   let existingItems = (await env.WOW_KV.get("feed_items", "json")) || [];
 
-  const linkRegex = /href=["']((?:https?:\/\/[^"']*)?\/(?:videos?|watch|embed|view|play|v)\/([0-9a-zA-Z_-]+)[^"']*)["']/gi;
+  // Video Links Regex (පිටුවේ තියෙන වීඩියෝ ලින්ක්ස් අල්ලයි)
+  const linkRegex = /href=["']((?:https?:\/\/[^"']*)?\/(?:videos?|watch|embed|view|play|v|post)\/([0-9a-zA-Z_-]+)[^"']*)["']/gi;
 
   let newlyFetchedItems = [];
 
@@ -94,7 +94,7 @@ async function updateVideoFeed(env, isDiagnostic = false) {
 
         if (!seenIds.includes(videoId)) {
           const origin = new URL(latestPageUrl).origin;
-          const fullUrl = rawPath.startsWith("http") ? rawPath : `${origin}${rawPath}`;
+          const fullUrl = rawPath.startsWith("http") ? rawPath : `${origin}${rawPath.startsWith('/') ? '' : '/'}${rawPath}`;
           
           if (!newVideosToProcess.some(v => v.url === fullUrl)) {
             newVideosToProcess.push({ id: videoId, url: fullUrl });
@@ -114,37 +114,31 @@ async function updateVideoFeed(env, isDiagnostic = false) {
           const pageHtml = await pageRes.text();
 
           const titleMatch = pageHtml.match(/<title>(.*?)<\/title>/i) || pageHtml.match(/<h1[^>]*>(.*?)<\/h1>/i);
-          let title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').replace(/ - JilHub/i, '').trim() : `Video ${video.id}`;
+          let title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').trim() : `Video ${video.id}`;
 
           let videoDirectUrl = null;
 
-          // 1. Static HTML / JS ඇතුළේ තියෙන KVS /get_file/ Path එක අල්ලා ගැනීම
-          const kvsFileMatch = pageHtml.match(/["']((?:https?:\/\/[^"'\s]+)?\/get_file\/[^\s"']+)["']/i);
-          
-          // 2. JS Variables (video_url, video_alt_url, file, etc.)
-          const jsVarMatch = pageHtml.match(/(?:video_url|video_alt_url|file|src)\s*:\s*["']([^"']+\.mp4[^"']*)["']/i);
-          
-          // 3. HTML Tag Matcher
-          const tagMatch = pageHtml.match(/<(?:video|source)[^>]+src=["']([^"']+\.mp4[^"']*)["']/i);
+          // 1. Image එකේ පෙනෙන Relative loadvideo/49355.mp4 pattern එක හෝ Direct MP4 Matcher එක
+          const mp4SrcMatch = pageHtml.match(/src=["']([^"']*\bloadvideo\/[^"']+\.mp4[^"']*|[^"']+\.mp4(?:\?[^"']*)?)["']/i);
 
-          if (kvsFileMatch) {
-            videoDirectUrl = kvsFileMatch[1];
-          } else if (jsVarMatch) {
-            videoDirectUrl = jsVarMatch[1];
-          } else if (tagMatch) {
-            videoDirectUrl = tagMatch[1];
+          if (mp4SrcMatch) {
+            videoDirectUrl = mp4SrcMatch[1];
           }
 
           if (videoDirectUrl) {
-            const origin = new URL(video.url).origin;
-            if (videoDirectUrl.startsWith("//")) {
+            const pageObj = new URL(video.url);
+
+            // Relative Path (../ හෝ /) Absolute URL එකක් බවට පත් කිරීම
+            if (videoDirectUrl.startsWith("http://") || videoDirectUrl.startsWith("https://")) {
+              // දැනටමත් Full URL එකක්
+            } else if (videoDirectUrl.startsWith("//")) {
               videoDirectUrl = "https:" + videoDirectUrl;
             } else if (videoDirectUrl.startsWith("/")) {
-              videoDirectUrl = `${origin}${videoDirectUrl}`;
+              videoDirectUrl = `${pageObj.origin}${videoDirectUrl}`;
+            } else {
+              // ../ හෝ relative paths සඳහා
+              videoDirectUrl = new URL(videoDirectUrl, video.url).href;
             }
-
-            // Clean .mp4 URL (/?rnd=... වැනි අමතර කොටස් අයින් කරයි)
-            videoDirectUrl = videoDirectUrl.replace(/(\.mp4)[\/?].*$/i, "$1");
 
             if (isDiagnostic) logs.push(`   ✅ Direct MP4 Link Found: ${videoDirectUrl}`);
 
@@ -235,4 +229,4 @@ function generateRssXml(items) {
     ${rssItems}
   </channel>
 </rss>`;
-            }
+}
