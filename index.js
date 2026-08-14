@@ -64,15 +64,17 @@ async function updateVideoFeed(env, isDiagnostic = false) {
       for (const match of allLinksMatch) {
         let link = match[1];
         
-        // Video ID එක අල්ලාගැනීම (පරණ සයිට් එකේ අංක සහ අලුත් සයිට් එකේ අකුරු/අංක දෙකටම ගැලපෙන සේ)
-        let idMatch = link.match(/\/video\/(\d+)/i) || link.match(/-([a-zA-Z0-9]+)(?:\/)?$/i) || link.match(/\/(\d{3,})/);
+        // අනවශ්‍ය පිටු (Pages) අයින් කිරීම
+        if(link.match(/\.(jpg|png|css|js|ico)$/i)) continue;
+        if(link.match(/(new|popular|top|categories|login|signup|tags|page-|models|xxx|\/search\/|watch-later|watch-history|\/my\/)/i)) continue; 
+        if(link === "/" || link === "#" || link.startsWith("javascript")) continue;
+
+        // Video ID එක අල්ලාගැනීම (පරණ සයිට් එකේ අංක සහ අලුත් සයිට් එකේ xh අකුරු සහිත අංක)
+        let idMatch = link.match(/\/video\/(\d+)/i) || link.match(/-(xh[a-zA-Z0-9]+)(?:\/)?$/i) || link.match(/\/(\d{3,})/);
         if (!idMatch) continue;
         
         let videoId = idMatch[1] || idMatch[2];
-
-        if(link.match(/\.(jpg|png|css|js|ico)$/i)) continue;
-        if(link.match(/(new|popular|top|categories|login|signup|tags|page-|models|xxx|\/search\/)/i)) continue; 
-        if(link === "/" || link === "#" || link.startsWith("javascript")) continue;
+        if (!videoId) continue;
 
         try {
           const origin = new URL(latestPageUrl).origin;
@@ -109,19 +111,20 @@ async function updateVideoFeed(env, isDiagnostic = false) {
 
           let finalMp4 = null;
           
-          // 1. අලුත් සයිට් එකෙන් .m3u8 Link එක හොයන Regex එක
-          let m3u8Match = vHtml.match(/<link[^>]+rel="preload"[^>]+href=["'](https:\/\/[^"']+\.m3u8[^"']*)["']/i);
+          // 1. අලුත් සයිට් එකෙන් .m3u8 Link එක හොයන Regex එක (බලවත් කළ එක)
+          let m3u8Match = vHtml.match(/(https:\/\/[^"'\s<>]+\.m3u8)/i);
+          
           // 2. පරණ සයිට් එකෙන් loadvideo mp4 Link එක හොයන Regex එක
           let cleanMp4Match = vHtml.match(/(\.\/common\/loadvideo\/[0-9]+\.mp4\?[^"'\s,]+)/i);
 
           if (m3u8Match && m3u8Match[1]) {
-             // අලුත් සයිට් එකේ m3u8 ලින්ක් එක අරගෙන අගින් '.m3u8' කොටස කපා හරිනවා
+             // m3u8 ලින්ක් එකෙන් .m3u8 කොටස කපා හරිනවා
              let m3u8Link = m3u8Match[1];
-             finalMp4 = m3u8Link.replace(/\.m3u8$/i, '');
+             finalMp4 = m3u8Link.replace(/\.m3u8.*$/i, '');
              logs.push(`      🎯 Final Direct CDN Link (m3u8 stripped): ${finalMp4}`);
              
           } else if (cleanMp4Match && cleanMp4Match[1]) {
-             // පරණ සයිට් එකේ ක්‍රියාවලිය (කිසිදු වෙනසක් නැත)
+             // පරණ සයිට් එකේ ක්‍රියාවලිය
              let matchedRawUrl = cleanMp4Match[1].replace(/&amp;/g, '&');
              let pageOrigin = new URL(video.url).origin;
              let cleanPath = matchedRawUrl.replace(/^\.\//, '/');
@@ -158,9 +161,6 @@ async function updateVideoFeed(env, isDiagnostic = false) {
              newlyFetchedItems.push(newItem);
              seenIds.push(video.id);
 
-             // -------------------------------------------------------------
-             // DISCORD STEP-BY-STEP NOTIFICATION LOGGING
-             // -------------------------------------------------------------
              logs.push(`      📤 [DISCORD] Webhooks වෙත යැවීමට සූදානම්...`);
              
              const discordPayload = {
