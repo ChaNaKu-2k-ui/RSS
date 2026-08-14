@@ -64,15 +64,15 @@ async function updateVideoFeed(env, isDiagnostic = false) {
       for (const match of allLinksMatch) {
         let link = match[1];
         
-        if(link.match(/\.(jpg|png|css|js|ico)$/i)) continue;
-        if(link.match(/(new|popular|top|categories|login|signup|tags|page-|models|xxx|\/search\/|watch-later|watch-history|\/my\/)/i)) continue; 
-        if(link === "/" || link === "#" || link.startsWith("javascript")) continue;
-
-        let idMatch = link.match(/\/video\/(\d+)/i) || link.match(/-(xh[a-zA-Z0-9]+)(?:\/)?$/i) || link.match(/\/(\d{3,})/);
+        // Video ID එක අල්ලාගැනීම (උදා: /video/49355/)
+        let idMatch = link.match(/\/video\/(\d+)/i) || link.match(/\/(\d{3,})/);
         if (!idMatch) continue;
         
-        let videoId = idMatch[1] || idMatch[2];
-        if (!videoId) continue;
+        let videoId = idMatch[1];
+
+        if(link.match(/\.(jpg|png|css|js|ico)$/i)) continue;
+        if(link.match(/(new|popular|top|categories|login|signup|tags|page-|models|xxx|\/search\/)/i)) continue; 
+        if(link === "/" || link === "#" || link.startsWith("javascript")) continue;
 
         try {
           const origin = new URL(latestPageUrl).origin;
@@ -86,11 +86,13 @@ async function updateVideoFeed(env, isDiagnostic = false) {
 
       logs.push(`   🔍 Video පිටු ${videoUrls.length} ක් හොයාගත්තා.`);
 
+      // අලුත්ම වීඩියෝ 3ක් පමණක් Process කරමු
       let testUrls = videoUrls.slice(0, 3);
 
       for (const video of testUrls) {
         logs.push(`\n   ▶️ Video ID [${video.id}] Check කරනවා: ${video.url}`);
 
+        // කලින් Discord එකට යවා ඇත්නම් නැවත යැවීම වළක්වයි
         if (seenIds.includes(video.id)) {
           logs.push(`      ⏩ මේ වීඩියෝ එක මීට පෙර යවා ඇත (Skipped).`);
           continue;
@@ -100,44 +102,15 @@ async function updateVideoFeed(env, isDiagnostic = false) {
           const vRes = await fetch(video.url, { headers });
           const vHtml = await vRes.text();
           
-          logs.push(`      📄 HTTP Status: ${vRes.status}`);
-          
           const vTitleMatch = vHtml.match(/<title[^>]*>(.*?)<\/title>/i) || vHtml.match(/<h1[^>]*>(.*?)<\/h1>/i);
           const vTitle = vTitleMatch ? vTitleMatch[1].replace(/<[^>]+>/g, '').trim() : `Video ${video.id}`;
           
           logs.push(`      🏷️ Title: ${vTitle}`);
 
           let finalMp4 = null;
-          
-          // 1. JSON escaping (\/) සහ Unicode (&) Unescape කිරීම
-          let decodedHtml = vHtml.replace(/\\\//g, '/').replace(/\\u0026/g, '&');
-          
-          // 2. xHamster සයිට් එකේ JSON Data වලින් Link එක අදින Regex
-          let jsonMp4 = decodedHtml.match(/"(?:mp4|720p|1080p|url)"\s*:\s*"([^"]+\.mp4[^"]*)"/i);
-          let jsonHls = decodedHtml.match(/"(?:hls|m3u8)"\s*:\s*"([^"]+\.m3u8[^"]*)"/i);
-          let jsonFallback = decodedHtml.match(/"fallbackURL"\s*:\s*"([^"]+)"/i);
-          
-          // 3. HTML එකේ කොතැන හෝ තියෙන xHamster CDN (xhcdn) Link එකක් බලෙන් ඇදලා ගැනීම
-          let xhcdnLinks = [...decodedHtml.matchAll(/(https:\/\/[^"'\s<>]*?xhcdn\.com[^"'\s<>]*?(?:mp4|m3u8)[^"'\s<>]*)/gi)].map(m => m[1]);
+          let cleanMp4Match = vHtml.match(/(\.\/common\/loadvideo\/[0-9]+\.mp4\?[^"'\s,]+)/i);
 
-          // 4. පරණ සයිට් එකේ Regex එක
-          let cleanMp4Match = decodedHtml.match(/(\.\/common\/loadvideo\/[0-9]+\.mp4\?[^"'\s,]+)/i);
-
-          if (jsonMp4 && jsonMp4[1]) {
-             finalMp4 = jsonMp4[1];
-             logs.push(`      🎯 Final Link (JSON MP4): ${finalMp4}`);
-          } else if (jsonHls && jsonHls[1]) {
-             finalMp4 = jsonHls[1].replace(/\.m3u8.*$/i, '');
-             logs.push(`      🎯 Final Link (JSON HLS): ${finalMp4}`);
-          } else if (jsonFallback && jsonFallback[1]) {
-             finalMp4 = jsonFallback[1];
-             logs.push(`      🎯 Final Link (JSON Fallback): ${finalMp4}`);
-          } else if (xhcdnLinks.length > 0) {
-             // mp4 එකක් තිබ්බොත් ඒක ගන්නවා, නැත්නම් m3u8 එකක් අරන් අග කෑල්ල කපනවා
-             let bestLink = xhcdnLinks.find(l => l.includes('.mp4') && !l.includes('.m3u8')) || xhcdnLinks[0];
-             finalMp4 = bestLink.replace(/\.m3u8.*$/i, '');
-             logs.push(`      🎯 Final Link (Regex xhcdn): ${finalMp4}`);
-          } else if (cleanMp4Match && cleanMp4Match[1]) {
+          if (cleanMp4Match && cleanMp4Match[1]) {
              let matchedRawUrl = cleanMp4Match[1].replace(/&amp;/g, '&');
              let pageOrigin = new URL(video.url).origin;
              let cleanPath = matchedRawUrl.replace(/^\.\//, '/');
@@ -160,12 +133,7 @@ async function updateVideoFeed(env, isDiagnostic = false) {
              }
 
              logs.push(`      🎯 Final Direct CDN Link: ${finalMp4}`);
-          }
 
-          if (finalMp4) {
-             // Link එකේ &amp; තිබ්බොත් ඒක & විදිහට හදනවා
-             finalMp4 = finalMp4.replace(/&amp;/g, '&');
-             
              const newItem = {
                id: video.id,
                title: vTitle,
@@ -177,10 +145,13 @@ async function updateVideoFeed(env, isDiagnostic = false) {
              newlyFetchedItems.push(newItem);
              seenIds.push(video.id);
 
+             // -------------------------------------------------------------
+             // DISCORD STEP-BY-STEP NOTIFICATION LOGGING
+             // -------------------------------------------------------------
              logs.push(`      📤 [DISCORD] Webhooks වෙත යැවීමට සූදානම්...`);
              
              const discordPayload = {
-               content: `🎬 **<@&885869329730637866>**\n🔗 ${finalMp4}`
+               content: `🔗 ${finalMp4}`
              };
 
              for (const wUrl of webhookUrls) {
@@ -203,7 +174,7 @@ async function updateVideoFeed(env, isDiagnostic = false) {
              }
 
           } else {
-             logs.push(`      ❌ Direct MP4 හෝ m3u8 හොයාගන්න බැරි වුණා.`);
+             logs.push(`      ❌ Direct MP4 හොයාගන්න බැරි වුණා.`);
           }
 
         } catch (e) {
