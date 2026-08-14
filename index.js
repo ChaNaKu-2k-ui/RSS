@@ -175,9 +175,9 @@ async function updateVideoFeed(env, isDiagnostic = false) {
 
                let messageContent = `🔔 **<@&1418013942730457158>**\n`;
                if (thumbnailUrl) {
-                 messageContent += `${thumbnailUrl}\n`;
+                 messageContent += `🚫 ${thumbnailUrl}\n`;
                }
-               messageContent += `🔗 ${finalMp4}`;
+               messageContent += `👉 🔗 ${finalMp4}`;
 
                const discordPayload = { content: messageContent };
                let isSuccessfullySent = false;
