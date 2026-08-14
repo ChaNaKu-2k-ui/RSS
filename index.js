@@ -295,4 +295,4 @@ function generateRssXml(items) {
     ${rssItems}
   </channel>
 </rss>`;
-      }
+                                   }
