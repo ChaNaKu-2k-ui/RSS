@@ -100,7 +100,6 @@ async function updateVideoFeed(env, isDiagnostic = false) {
           const vRes = await fetch(video.url, { headers });
           const vHtml = await vRes.text();
           
-          // පිටුව සාර්ථකව ආවද, නැත්නම් බ්ලොක් වුණාද කියලා බලාගන්න Status එක ලොග් කරමු
           logs.push(`      📄 HTTP Status: ${vRes.status}`);
           
           const vTitleMatch = vHtml.match(/<title[^>]*>(.*?)<\/title>/i) || vHtml.match(/<h1[^>]*>(.*?)<\/h1>/i);
@@ -110,23 +109,34 @@ async function updateVideoFeed(env, isDiagnostic = false) {
 
           let finalMp4 = null;
           
-          // JSON escaping අයින් කිරීම (උදා: \/ -> /)
-          let decodedHtml = vHtml.replace(/\\\//g, '/');
+          // 1. JSON escaping (\/) සහ Unicode (&) Unescape කිරීම
+          let decodedHtml = vHtml.replace(/\\\//g, '/').replace(/\\u0026/g, '&');
           
-          // 1. අලුත් සයිට් එකෙන් .m3u8 Link එක හොයන Regex එක
-          let m3u8Match = decodedHtml.match(/(https:\/\/[^"'\s<>]+\.m3u8)/i);
+          // 2. xHamster සයිට් එකේ JSON Data වලින් Link එක අදින Regex
+          let jsonMp4 = decodedHtml.match(/"(?:mp4|720p|1080p|url)"\s*:\s*"([^"]+\.mp4[^"]*)"/i);
+          let jsonHls = decodedHtml.match(/"(?:hls|m3u8)"\s*:\s*"([^"]+\.m3u8[^"]*)"/i);
+          let jsonFallback = decodedHtml.match(/"fallbackURL"\s*:\s*"([^"]+)"/i);
           
-          // 2. m3u8 නැත්නම් mp4 එකක් තියෙනවද බලන Fallback එක
-          let fallbackMp4Match = decodedHtml.match(/(https:\/\/[^"'\s<>]+\.mp4)/i);
+          // 3. HTML එකේ කොතැන හෝ තියෙන xHamster CDN (xhcdn) Link එකක් බලෙන් ඇදලා ගැනීම
+          let xhcdnLinks = [...decodedHtml.matchAll(/(https:\/\/[^"'\s<>]*?xhcdn\.com[^"'\s<>]*?(?:mp4|m3u8)[^"'\s<>]*)/gi)].map(m => m[1]);
 
-          // 3. පරණ සයිට් එකෙන් loadvideo mp4 Link එක හොයන Regex එක
+          // 4. පරණ සයිට් එකේ Regex එක
           let cleanMp4Match = decodedHtml.match(/(\.\/common\/loadvideo\/[0-9]+\.mp4\?[^"'\s,]+)/i);
 
-          if (m3u8Match && m3u8Match[1]) {
-             let m3u8Link = m3u8Match[1];
-             finalMp4 = m3u8Link.replace(/\.m3u8.*$/i, '');
-             logs.push(`      🎯 Final Direct CDN Link (m3u8 stripped): ${finalMp4}`);
-             
+          if (jsonMp4 && jsonMp4[1]) {
+             finalMp4 = jsonMp4[1];
+             logs.push(`      🎯 Final Link (JSON MP4): ${finalMp4}`);
+          } else if (jsonHls && jsonHls[1]) {
+             finalMp4 = jsonHls[1].replace(/\.m3u8.*$/i, '');
+             logs.push(`      🎯 Final Link (JSON HLS): ${finalMp4}`);
+          } else if (jsonFallback && jsonFallback[1]) {
+             finalMp4 = jsonFallback[1];
+             logs.push(`      🎯 Final Link (JSON Fallback): ${finalMp4}`);
+          } else if (xhcdnLinks.length > 0) {
+             // mp4 එකක් තිබ්බොත් ඒක ගන්නවා, නැත්නම් m3u8 එකක් අරන් අග කෑල්ල කපනවා
+             let bestLink = xhcdnLinks.find(l => l.includes('.mp4') && !l.includes('.m3u8')) || xhcdnLinks[0];
+             finalMp4 = bestLink.replace(/\.m3u8.*$/i, '');
+             logs.push(`      🎯 Final Link (Regex xhcdn): ${finalMp4}`);
           } else if (cleanMp4Match && cleanMp4Match[1]) {
              let matchedRawUrl = cleanMp4Match[1].replace(/&amp;/g, '&');
              let pageOrigin = new URL(video.url).origin;
@@ -150,16 +160,12 @@ async function updateVideoFeed(env, isDiagnostic = false) {
              }
 
              logs.push(`      🎯 Final Direct CDN Link: ${finalMp4}`);
-
-          } else if (fallbackMp4Match && fallbackMp4Match[1]) {
-             // xHamster CDN (xhcdn) ලින්ක් එකක් නම් විතරක් ගන්නවා
-             if (fallbackMp4Match[1].includes('xhcdn')) {
-                 finalMp4 = fallbackMp4Match[1];
-                 logs.push(`      🎯 Final Direct CDN Link (mp4 fallback): ${finalMp4}`);
-             }
           }
 
           if (finalMp4) {
+             // Link එකේ &amp; තිබ්බොත් ඒක & විදිහට හදනවා
+             finalMp4 = finalMp4.replace(/&amp;/g, '&');
+             
              const newItem = {
                id: video.id,
                title: vTitle,
