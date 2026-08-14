@@ -151,7 +151,7 @@ async function updateVideoFeed(env, isDiagnostic = false) {
              logs.push(`      📤 [DISCORD] Webhooks වෙත යැවීමට සූදානම්...`);
              
              const discordPayload = {
-               content: `🔗 ${finalMp4}`
+               content: `🎬 **<@&1418013942730457158>**\n🔗 ${finalMp4}`
              };
 
              for (const wUrl of webhookUrls) {
