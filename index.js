@@ -173,7 +173,7 @@ async function updateVideoFeed(env, isDiagnostic = false) {
                  finalMp4 = loadVideoUrl; 
                }
 
-               let messageContent = `🔔 **<@&1418013942730457158>**\n`;
+               let messageContent = `🔔 **<@&1418013942730457158><@&1321354298424168448>**\n`;
                if (thumbnailUrl) {
                  messageContent += `🚫 ${thumbnailUrl}\n`;
                }
