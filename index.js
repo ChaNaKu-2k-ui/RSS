@@ -37,14 +37,13 @@ async function fetchGitHubTextFile(fileUrl) {
 // Logging සඳහා වෙලාව ලබාගන්නා Function එක
 function getCurrentTimeFormatted() {
   const now = new Date();
-  return now.toISOString().split('T')[1].substring(0, 8); // උදා: "10:25:30"
+  return now.toISOString().split('T')[1].substring(0, 8);
 }
 
 // ප්‍රධාන ක්‍රියාවලිය (Main Pipeline)
 async function updateVideoFeed(env, isDiagnostic = false) {
   let logs = [];
   
-  // Custom Logger එක
   const logInfo = (msg) => logs.push(`[${getCurrentTimeFormatted()}] ${msg}`);
   const logSub = (msg) => logs.push(`    ↳ ${msg}`);
 
@@ -66,14 +65,13 @@ async function updateVideoFeed(env, isDiagnostic = false) {
   let existingItems = (await env.WOW_KV.get("feed_items", "json")) || [];
   let newlyFetchedItems = [];
 
-  // මෙම Refresh එකේදී යැවූ වීඩියෝ ගණන (අපිට අවශ්‍ය 1ක් පමණි)
   let videosSentThisRun = 0;
   const TARGET_SEND_COUNT = 1; 
 
   logInfo(`📊 Database Check: කලින් යැවූ වීඩියෝ ගණන (seen_ids): ${seenIds.length}`);
 
   for (const latestPageUrl of targetPages) {
-    if (videosSentThisRun >= TARGET_SEND_COUNT) break; // අවශ්‍ය ප්‍රමාණය යවා ඇත්නම් පිටු පිරික්සීම නවත්වයි
+    if (videosSentThisRun >= TARGET_SEND_COUNT) break; 
 
     logInfo(`🌐 Fetching Main Page: ${latestPageUrl}`);
     
@@ -88,7 +86,6 @@ async function updateVideoFeed(env, isDiagnostic = false) {
       const allLinksMatch = [...html.matchAll(/<a[^>]+href=["']([^"']+)["']/gi)];
       let videoUrls = [];
       
-      // ලින්ක් එකතු කිරීම සහ ෆිල්ටර් කිරීම
       for (const match of allLinksMatch) {
         let link = match[1];
         
@@ -113,18 +110,14 @@ async function updateVideoFeed(env, isDiagnostic = false) {
 
       logInfo(`🔍 Analysis: පිටුව තුළින් අලුත් වීඩියෝ ලින්ක් ${videoUrls.length} ක් සොයාගන්නා ලදී.`);
 
-      // --------------------------------------------------------------------------------
-      // ULTRA PRO MAX: එකින් එක පරීක්ෂා කිරීමේ මෙහෙයුම (Loop through ALL videos until 1 is sent)
-      // --------------------------------------------------------------------------------
       for (const video of videoUrls) {
         if (videosSentThisRun >= TARGET_SEND_COUNT) {
           logInfo(`🛑 SUCCESS: අවශ්‍ය වීඩියෝ ප්‍රමාණය (1) සාර්ථකව යවා ඇති බැවින් Search එක නවත්වයි.`);
-          break; // වීඩියෝ 1ක් යැවූ පසු මුළු ක්‍රියාවලියම නවතී
+          break;
         }
 
         logInfo(`▶️ Inspecting Video ID [${video.id}]`);
 
-        // කලින් යවා ඇත්නම් Skip කරයි
         if (seenIds.includes(video.id)) {
           logSub(`⏩ Status: Alredy Sent (Skip කරන ලදී). ඊළඟ වීඩියෝවට යයි...`);
           continue;
@@ -144,6 +137,24 @@ async function updateVideoFeed(env, isDiagnostic = false) {
           const vTitleMatch = vHtml.match(/<title[^>]*>(.*?)<\/title>/i) || vHtml.match(/<h1[^>]*>(.*?)<\/h1>/i);
           const vTitle = vTitleMatch ? vTitleMatch[1].replace(/<[^>]+>/g, '').trim() : `Video ${video.id}`;
           logSub(`🏷️ Title: ${vTitle}`);
+
+          // Thumbnail ලබා ගැනීමේ කොටස
+          let thumbMatch = vHtml.match(/<meta\s+(?:property|name)=["'](?:og:image|twitter:image)["']\s+content=["']([^"']+)["']/i) ||
+                           vHtml.match(/poster=["']([^"']+)["']/i) || 
+                           vHtml.match(/<img[^>]+(?:class|id)=["'][^"']*(?:thumb|poster)[^"']*["'][^>]+src=["']([^"']+)["']/i);
+                           
+          let thumbnailUrl = thumbMatch ? thumbMatch[1] : null;
+
+          if (thumbnailUrl) {
+            thumbnailUrl = thumbnailUrl.replace(/&amp;/g, '&');
+            if (!thumbnailUrl.startsWith("http")) {
+               const pageOrigin = new URL(video.url).origin;
+               thumbnailUrl = thumbnailUrl.startsWith("/") ? pageOrigin + thumbnailUrl : pageOrigin + "/" + thumbnailUrl;
+            }
+            logSub(`🖼️ Thumbnail: ${thumbnailUrl}`);
+          } else {
+            logSub(`⚠️ Thumbnail සොයාගැනීමට නොහැකි විය.`);
+          }
 
           let finalMp4 = null;
           let cleanMp4Match = vHtml.match(/(\.\/common\/loadvideo\/[0-9]+\.mp4\?[^"'\s,]+)/i);
@@ -167,17 +178,28 @@ async function updateVideoFeed(env, isDiagnostic = false) {
                  finalMp4 = loadVideoUrl;
                }
              } catch (err) {
-               finalMp4 = loadVideoUrl; // Fetch failed, fallback to raw loadUrl
+               finalMp4 = loadVideoUrl; 
              }
 
              logSub(`🎯 MP4 Extracted: ${finalMp4}`);
 
-             // Discord Message යැවීම
              logInfo(`📤 [DISCORD] Payload සූදානම් කර Webhooks වෙත යවමින් පවතී...`);
              
+             // --- අලුත් Discord Payload එක (සරල Text විදිහට) ---
+             let messageContent = `🔔 **<@&1418013942730457158>**\n`;
+             
+             // Thumbnail එකක් තියෙනවා නම් ඒකේ ලින්ක් එක දානවා (Discord එකෙන් මේක auto-embed කරලා පින්තූරේ පෙන්නනවා)
+             if (thumbnailUrl) {
+               messageContent += `${thumbnailUrl}\n`;
+             }
+             
+             // අන්තිමට වීඩියෝ ලින්ක් එක
+             messageContent += `🔗 ${finalMp4}`;
+
              const discordPayload = {
-               content: `🎬 **<@&1418013942730457158>**\n🔗 ${finalMp4}`
+               content: messageContent
              };
+             // -------------------------------------------------------------
 
              let isSuccessfullySent = false;
 
@@ -201,7 +223,6 @@ async function updateVideoFeed(env, isDiagnostic = false) {
                }
              }
 
-             // Discord යැවීම සාර්ථක නම් පමණක් Database එකට Add කිරීම
              if (isSuccessfullySent) {
                const newItem = {
                  id: video.id,
@@ -213,7 +234,7 @@ async function updateVideoFeed(env, isDiagnostic = false) {
 
                newlyFetchedItems.push(newItem);
                seenIds.push(video.id);
-               videosSentThisRun++; // ගණන එකකින් වැඩි කරයි (ඊළඟ loop එකේදී නතර වීමට)
+               videosSentThisRun++; 
                logInfo(`🌟 වීඩියෝව සාර්ථකව Database එකට ඇතුලත් කර ප්‍රධාන ක්‍රියාවලියෙන් ඉවත් වෙයි.`);
              } else {
                logSub(`⚠️ Discord යැවීම අසාර්ථක බැවින් seen_ids වෙත එකතු නොකළේය. ඊළඟ වීඩියෝව පරීක්ෂා කරයි.`);
@@ -226,17 +247,16 @@ async function updateVideoFeed(env, isDiagnostic = false) {
         } catch (e) {
           logSub(`❌ Fetch Crash: පිටුව කියවීමේදී දෝෂයක් (${e.message})`);
         }
-      } // End of inner video loop
+      } 
 
     } catch (err) {
       logSub(`❌ Main Page Critical Error: ${err.message}`);
     }
-  } // End of targetPages loop
+  } 
 
-  // Database Update කිරීම
   if (newlyFetchedItems.length > 0) {
-    existingItems = [...newlyFetchedItems, ...existingItems].slice(0, 50); // RSS Feed එක අන්තිම 50ට සීමා කිරීම
-    if (seenIds.length > 1000) seenIds = seenIds.slice(seenIds.length - 1000); // Storage පිරිමහන්න seen_ids 1000 කට සීමා කිරීම
+    existingItems = [...newlyFetchedItems, ...existingItems].slice(0, 50); 
+    if (seenIds.length > 1000) seenIds = seenIds.slice(seenIds.length - 1000); 
 
     await env.WOW_KV.put("seen_ids", JSON.stringify(seenIds));
     await env.WOW_KV.put("feed_items", JSON.stringify(existingItems));
